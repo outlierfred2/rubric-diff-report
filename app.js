@@ -53,151 +53,182 @@ function compare(before, after) {
 const entities = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\r": "&#13;", "\0": "␀" };
 const escapeHTML = text => text.replace(/[&<>\r\0]/g, character => entities[character]);
 
+const explicitHeading = /^\s*(\d+)\s*:\s*Component\s*[-–—]\s*(\S.*?)\s*$/i;
+const numberedHeading = /^\s*(\d+)\s*:\s*(\S.*?)\s*$/;
+
 function parseRubric(text) {
-  const preamble = { description: [], options: [] };
+  const input = lines(text);
+  const headingPattern = input.some(line => explicitHeading.test(line))
+    ? explicitHeading : numberedHeading;
+  const preamble = [];
   const components = [];
-  let current = preamble;
-  let field = "description";
-  for (const line of lines(text)) {
-    const heading = line.match(/^\s*(\d+)\s*:\s*Component\s*[-–—]\s*(\S.*?)\s*$/i);
+  let content = preamble;
+  for (const line of input) {
+    const heading = line.match(headingPattern);
     if (heading) {
-      current = { number: heading[1], name: heading[2], heading: [line],
-        description: [], options: [] };
-      components.push(current);
-      field = "description";
+      content = [];
+      components.push({ number: heading[1], name: heading[2], heading: line.trim(), content });
     } else {
-      if (current !== preamble && /^\s*Rating Options\s*:?\s*$/i.test(line)) {
-        field = "options";
-      }
-      current[field].push(line);
+      content.push(line);
     }
   }
   return { preamble, components };
 }
 
+function groupByName(components) {
+  const groups = new Map();
+  for (const component of components) {
+    const name = component.name.toLowerCase();
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(component);
+  }
+  return groups;
+}
+
 function pairComponents(before, after) {
-  const remaining = new Set(before);
-  const pairs = after.map(component => [undefined, component]);
-  for (const [key, normalize] of [
-    ["name", name => name.toLowerCase()],
-    ["number", number => number]
-  ]) {
-    const lookup = components => {
-      const byKey = new Map();
-      for (const component of components) {
-        const value = normalize(component[key]);
-        byKey.set(value, byKey.has(value) ? null : component);
-      }
-      return byKey;
-    };
-    const original = lookup(remaining);
-    const updated = lookup(pairs.filter(([left]) => !left).map(([, right]) => right));
-    for (const pair of pairs) {
-      const value = normalize(pair[1][key]);
-      const match = original.get(value);
-      if (!pair[0] && match && updated.get(value)) {
-        pair[0] = match;
-        remaining.delete(match);
-      }
+  const originals = groupByName(before);
+  const updates = groupByName(after);
+  const byOriginal = new Map();
+  const pairs = after.map(right => {
+    const name = right.name.toLowerCase();
+    const candidates = originals.get(name) ?? [];
+    const matchingNumber = candidates.filter(left => left.number === right.number);
+    const sameNumberCount = updates.get(name).filter(item => item.number === right.number).length;
+    const left = candidates.length === 1 && updates.get(name).length === 1
+      ? candidates[0]
+      : matchingNumber.length === 1 && sameNumberCount === 1 ? matchingNumber[0] : undefined;
+    const pair = { left, right, removedBefore: [] };
+    if (left) byOriginal.set(left, pair);
+    return pair;
+  });
+
+  // Keep removed tiles near their original neighbors while using the updated order.
+  const trailing = [];
+  let removed = trailing;
+  for (let index = before.length - 1; index >= 0; index--) {
+    const left = before[index];
+    const pair = byOriginal.get(left);
+    if (pair) removed = pair.removedBefore;
+    else removed.push({ left });
+  }
+  return pairs.flatMap(pair => [...pair.removedBefore.reverse(), pair]).concat(trailing.reverse());
+}
+
+function trimTrailingBlanks(block) {
+  let end = block.length;
+  while (end && !block[end - 1].trim()) end--;
+  return block.slice(0, end);
+}
+
+function renderRows(changes) {
+  const rows = [];
+  let removed = [];
+  let added = [];
+  const cell = (value, kind) => {
+    if (value === undefined) return '<td class="gap"></td>';
+    const label = { added: "+ Added", removed: "− Removed" }[kind];
+    const marker = label ? `<span class="marker" aria-label="${label}">${label[0]}</span>` : "";
+    return `<td class="${kind}">${marker}<span class="line">${escapeHTML(value)}</span></td>`;
+  };
+  const flush = () => {
+    for (let index = 0; index < Math.max(removed.length, added.length); index++) {
+      rows.push(`<tr>${cell(removed[index], "removed")}${cell(added[index], "added")}</tr>`);
+    }
+    removed = [];
+    added = [];
+  };
+  for (const [kind, value] of changes) {
+    if (kind === "same") {
+      flush();
+      rows.push(`<tr>${cell(value, "same")}${cell(value, "same")}</tr>`);
+    } else {
+      (kind === "removed" ? removed : added).push(value);
     }
   }
-  return pairs.concat(Array.from(remaining, component => [component, undefined]));
+  flush();
+  return rows.join("");
 }
 
-function trimBlankEdges(block) {
-  const first = block.findIndex(line => line.trim());
-  if (first === -1) return [];
-  let end = block.length;
-  while (!block[end - 1].trim()) end--;
-  return block.slice(first, end);
+function renderTile(id, title, left, right, originalHeading, updatedHeading) {
+  const { changes, coarse } = compare(trimTrailingBlanks(left ?? []), trimTrailingBlanks(right ?? []));
+  const kind = !left ? "added" : !right ? "removed"
+    : originalHeading !== updatedHeading || changes.some(([type]) => type !== "same") ? "modified" : "unchanged";
+  const columnHeading = (label, block, heading) => {
+    const detail = block ? heading : "Component absent";
+    return `<th scope="col">${label}${detail ? `<small>${escapeHTML(detail)}</small>` : ""}</th>`;
+  };
+  return `<section class="tile" aria-labelledby="${id}">
+<header class="tile-heading"><h3 id="${id}">${escapeHTML(title)}</h3><span class="badge ${kind}">${kind}</span></header>
+<table aria-labelledby="${id}"><thead><tr>
+${columnHeading("Original", left, originalHeading)}${columnHeading("Updated", right, updatedHeading)}
+</tr></thead><tbody>${renderRows(changes)}</tbody></table>
+${coarse ? "<p>This component is large, so its changes are shown as one replacement.</p>" : ""}
+</section>`;
 }
 
-function renderDiff(before, after) {
-  const { changes, coarse } = compare(trimBlankEdges(before), trimBlankEdges(after));
-  const items = changes.filter(([kind]) => kind !== "same").map(([kind, value]) => {
-    const marker = kind === "added" ? "+" : "−";
-    const content = value.trim() ? escapeHTML(value) : '<em>Blank line</em>';
-    return `<li class="item ${kind}"><span class="marker" aria-hidden="true">${marker}</span><span class="sr-only">${kind}: </span><span class="item-text">${content}</span></li>`;
-  }).join("");
-  if (!items) return "";
-  return `${coarse ? "<p>This block is large, so its changes are shown as one replacement.</p>" : ""}
-<ul class="changes" role="list">${items}</ul>`;
-}
-
-function report(before, after) {
+function renderReport(before, after) {
   const original = parseRubric(before);
   const updated = parseRubric(after);
-  const counts = { modified: 0, added: 0, removed: 0, unchanged: 0 };
-  const preamble = renderDiff(original.preamble.description, updated.preamble.description);
-  const sections = pairComponents(original.components, updated.components).map(([left, right], index) => {
+  const components = pairComponents(original.components, updated.components);
+  const tiles = components.map(({ left, right }, index) => {
     const component = right ?? left;
-    const fields = [
-      ["Heading", "heading"],
-      ["Description", "description"],
-      ["Rating options", "options"]
-    ].map(([label, key]) => {
-      if (key === "heading" && (!left || !right)) return "";
-      const diff = renderDiff(left?.[key] ?? [], right?.[key] ?? []);
-      return diff ? `<div class="field"><h3>${label}</h3>${diff}</div>` : "";
-    }).join("");
-    const kind = !left ? "added" : !right ? "removed" : fields ? "modified" : "unchanged";
-    counts[kind]++;
-    const id = `component-${index + 1}`;
-    return `<section class="component component-${kind}" aria-labelledby="${id}">
-<header class="component-header">
-<span class="number">Component ${component.number}</span>
-<h2 id="${id}">${escapeHTML(component.name)}</h2>
-<span class="badge ${kind}">${kind}</span>
-</header>
-${fields || (kind === "unchanged" ? '<p class="empty">No item changes.</p>' : "")}
-</section>`;
+    return renderTile(`component-${index + 1}`, `${component.number}. ${component.name}`,
+      left?.content, right?.content, left?.heading, right?.heading);
   }).join("");
-  const summary = Object.entries(counts)
-    .map(([kind, count]) => `<span class="${kind}">${count} ${kind}</span>`).join("");
+  const preamble = [...original.preamble, ...updated.preamble].some(line => line.trim())
+    ? renderTile("outside-components", "Text outside components", original.preamble, updated.preamble)
+    : "";
+  return `<h2 id="report-title" tabindex="-1">Component comparison</h2>
+<p class="legend"><span class="removed">− Removed</span> <span class="added">+ Added</span></p>
+${components.length ? tiles : '<p>No numbered component headings found. Start each section with a heading such as <code>1: Component - Accuracy</code> or <code>1: Accuracy</code>.</p>'}
+${preamble}`;
+}
+
+const reportStyles = `
+.rubric-report{color:#162724;font:1rem/1.5 system-ui,sans-serif}
+.rubric-report h2{margin:0;font-size:1.65rem}
+.rubric-report .legend{display:flex;gap:8px;margin:8px 0 20px}
+.rubric-report .badge,.rubric-report .legend span{padding:4px 9px;border-radius:6px;font-size:.8rem;font-weight:700}
+.rubric-report .badge{text-transform:capitalize}
+.rubric-report .added{background:#dcf5e6;color:#145235}
+.rubric-report .removed{background:#fce5e5;color:#842b31}
+.rubric-report .modified{background:#fff0cc;color:#634500}
+.rubric-report .unchanged{background:#e6eeea;color:#435751}
+.rubric-report .tile{overflow:hidden;margin:0 0 18px;background:white;border:1px solid #bfcfc6;border-radius:12px}
+.rubric-report .tile-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;background:#e6eeea}
+.rubric-report h3{margin:0;font-size:1.1rem;overflow-wrap:anywhere}
+.rubric-report table{width:100%;border-collapse:collapse;table-layout:fixed}
+.rubric-report th,.rubric-report td{padding:6px 10px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.rubric-report th{width:50%;background:#f4f7f5;font-size:.85rem;border-top:1px solid #cddbd4}
+.rubric-report th small{display:block;color:#526460;font-size:.82rem;font-weight:400}
+.rubric-report td{border-top:1px solid #e0e8e3;font-size:.9rem}
+.rubric-report :is(th,td) + :is(th,td){border-left:1px solid #cddbd4}
+.rubric-report .gap{background:#f6f8f7}
+.rubric-report .marker{margin-right:.4em;font-weight:800}
+.rubric-report .line{white-space:pre-wrap}
+.rubric-report .tile > p{padding:0 10px}
+`;
+
+function standaloneReport(content) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
 <title>Rubric Diff Report</title><style>
-*{box-sizing:border-box}
-body{margin:0;background:#f2f5f3;color:#162724;font:1rem/1.5 system-ui,sans-serif}
-main{max-width:900px;margin:auto;padding:clamp(22px,5vw,48px) clamp(12px,4vw,28px)}
-h1{margin:0;font-size:clamp(1.8rem,5vw,2.7rem);letter-spacing:-.04em;line-height:1.15}
-.legend{margin:8px 0;color:#526460}
-.summary{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 26px}
-.badge,.summary span{display:inline-block;padding:4px 9px;border-radius:6px;font-size:.8rem;font-weight:700}
-.badge{text-transform:capitalize}
-.added{background:#dcf5e6;color:#145235}.removed{background:#fce5e5;color:#842b31}
-.modified{background:#fff0cc;color:#634500}.unchanged{background:#e6eeea;color:#435751}
-.component{overflow:hidden;margin:0 0 18px;background:white;border:1px solid #cddbd4;border-radius:12px}
-.component-header{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;padding:14px 16px;background:#e6eeea;border-left:5px solid #657a70}
-.component-modified .component-header{border-left-color:#9c6c06}
-.component-added .component-header{border-left-color:#268457}
-.component-removed .component-header{border-left-color:#b54448}
-.number{font-size:.78rem;font-weight:750;color:#435751}
-h2{margin:0;flex:1 1 12rem;font-size:1.2rem;overflow-wrap:anywhere}
-.field,.empty{margin:0;padding:12px 16px 16px}
-.field + .field{border-top:1px solid #e6eeea}
-h3{margin:0 0 7px;font-size:.85rem}
-.empty{color:#526460;font-size:.9rem}
-.changes{display:grid;gap:4px;list-style:none;margin:0;padding:0}
-.item{display:grid;grid-template-columns:1rem minmax(0,1fr);gap:8px;padding:7px 10px;border-left:3px solid;border-radius:5px}
-.item.added{border-left-color:#268457}.item.removed{border-left-color:#b54448}
-.marker{font-weight:800}
-.item-text{white-space:pre-wrap;overflow-wrap:anywhere}
-.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-</style></head><body><main><h1>Rubric Diff Report</h1>
-<p class="legend">Only changed lines are shown. <strong>−</strong> Removed · <strong>+</strong> Added</p>
-<div class="summary" aria-label="Component summary">${summary}</div>
-${sections || '<p>No component headings found. Use <code>1: Component - Accuracy</code> to start a section.</p>'}
-${preamble ? `<section class="component" aria-labelledby="outside-components"><header class="component-header"><h2 id="outside-components">Text outside components</h2></header><div class="field">${preamble}</div></section>` : ""}
-</main></body></html>`;
+*{box-sizing:border-box}body{margin:0;background:#f6f8f5}
+main{max-width:1100px;margin:auto;padding:24px 12px}
+${reportStyles}
+</style></head><body><main class="rubric-report">${content}</main></body></html>`;
 }
 
 const form = document.querySelector("#comparison");
 const original = document.querySelector("#original");
 const updated = document.querySelector("#updated");
 const status = document.querySelector("#status");
+const results = document.querySelector("#results");
+const styles = document.createElement("style");
+styles.textContent = reportStyles;
+document.head.append(styles);
 
 function updateControls() {
   for (const input of [original, updated]) {
@@ -208,25 +239,30 @@ function updateControls() {
     button.disabled = !original.value && !updated.value;
   }
   status.textContent = "";
+  results.hidden = true;
 }
 
 form.addEventListener("input", updateControls);
 form.addEventListener("submit", event => {
   event.preventDefault();
-  const download = event.submitter?.name === "download";
-  const file = new Blob([report(original.value, updated.value)], { type: "text/html;charset=utf-8" });
+  const content = renderReport(original.value, updated.value);
+  if (event.submitter?.name !== "download") {
+    results.innerHTML = content;
+    results.hidden = false;
+    results.querySelector("h2").focus({ preventScroll: true });
+    results.scrollIntoView();
+    status.textContent = "Component comparison updated.";
+    return;
+  }
+  const file = new Blob([standaloneReport(content)], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(file);
   const link = document.createElement("a");
   link.href = url;
-  if (download) link.download = "rubric-diff-report.html";
-  else {
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-  }
+  link.download = "rubric-diff-report.html";
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  status.textContent = download ? "HTML download requested." : "Report requested in a new tab.";
+  status.textContent = "HTML download requested.";
 });
 updateControls();
