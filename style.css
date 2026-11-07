@@ -27,5 +27,3 @@ button.primary{background:var(--accent);border-color:var(--accent);color:white}
 button:hover:enabled{filter:brightness(.92)}
 button:disabled{opacity:.55;cursor:default}
 @media(max-width:650px){.bar,main{padding-inline:16px}.intro{margin-top:35px}.editors{grid-template-columns:1fr}textarea{min-height:170px}.hint{flex-basis:100%;margin-bottom:5px}}
-.report-option{display:flex;align-items:center;gap:8px;width:fit-content;margin-top:12px;padding:0;border:0;font-size:.88rem;cursor:pointer}
-.report-option input{accent-color:var(--accent)}

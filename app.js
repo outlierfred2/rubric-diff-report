@@ -200,6 +200,7 @@ function renderReport(before, after) {
   return `<p class="report-credit">Reported generated at <a href="https://outlierfred2.github.io/rubric-diff-report/">outlierfred2@github.io/rubric-diff-report</a></p>
 <h2 id="report-title" tabindex="-1">Component comparison</h2>
 <p class="legend"><span class="removed">− Removed</span> <span class="added">+ Added</span></p>
+${components.length ? '<label class="report-option"><input type="checkbox"> Hide unmodified components</label>' : ""}
 ${components.length ? tiles : '<p>No numbered component headings found. Start each section with a number such as <code>1.</code> on one line and <code>Component: Accuracy</code> on the next.</p>'}
 ${components.length ? '<p class="no-component-changes">No modified, added, or removed components.</p>' : ""}
 ${preamble}`;
@@ -209,9 +210,11 @@ const reportStyles = `
 .rubric-report{color:#162724;font:1rem/1.5 system-ui,sans-serif}
 .rubric-report .report-credit{margin:0 0 12px;color:#526460;font-size:.85rem}
 .rubric-report .report-credit a{color:#076348}
-.rubric-report.hide-unmodified .tile[data-status="unchanged"]:not([aria-labelledby="outside-components"]),
+.rubric-report .report-option{display:flex;align-items:center;gap:8px;width:fit-content;margin:0 0 16px;padding:0;border:0;font-size:.88rem;font-weight:650;cursor:pointer}
+.rubric-report .report-option input{accent-color:#076348}
+.rubric-report:has(> .report-option input:checked) .tile[data-status="unchanged"]:not([aria-labelledby="outside-components"]),
 .rubric-report .no-component-changes{display:none}
-.rubric-report.hide-unmodified:not(:has(.tile[data-status]:not([data-status="unchanged"]):not([aria-labelledby="outside-components"]))) .no-component-changes{display:block}
+.rubric-report:has(> .report-option input:checked):not(:has(.tile[data-status]:not([data-status="unchanged"]):not([aria-labelledby="outside-components"]))) .no-component-changes{display:block}
 .rubric-report h2{margin:0;font-size:1.65rem}
 .rubric-report .legend{display:flex;gap:8px;margin:8px 0 20px}
 .rubric-report .badge,.rubric-report .legend span{padding:4px 9px;border-radius:6px;font-size:.8rem;font-weight:700}
@@ -235,7 +238,7 @@ const reportStyles = `
 .rubric-report .tile > p{padding:0 10px}
 `;
 
-function standaloneReport(content, hideUnmodified) {
+function standaloneReport(content) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -244,7 +247,7 @@ function standaloneReport(content, hideUnmodified) {
 *{box-sizing:border-box}body{margin:0;background:#f6f8f5}
 main{max-width:1100px;margin:auto;padding:24px 12px}
 ${reportStyles}
-</style></head><body><main class="rubric-report${hideUnmodified ? " hide-unmodified" : ""}">${content}</main></body></html>`;
+</style></head><body><main class="rubric-report">${content}</main></body></html>`;
 }
 
 const form = document.querySelector("#comparison");
@@ -252,7 +255,6 @@ const original = document.querySelector("#original");
 const updated = document.querySelector("#updated");
 const status = document.querySelector("#status");
 const results = document.querySelector("#results");
-const hideUnmodified = document.querySelector("#hide-unmodified");
 const styles = document.createElement("style");
 styles.textContent = reportStyles;
 document.head.append(styles);
@@ -269,17 +271,10 @@ function updateControls() {
   results.hidden = true;
 }
 
-form.addEventListener("input", event => {
-  if (event.target === hideUnmodified) {
-    results.classList.toggle("hide-unmodified", hideUnmodified.checked);
-    return;
-  }
-  updateControls();
-});
+form.addEventListener("input", updateControls);
 form.addEventListener("submit", event => {
   event.preventDefault();
   const content = renderReport(original.value, updated.value);
-  results.classList.toggle("hide-unmodified", hideUnmodified.checked);
   if (event.submitter?.name !== "download") {
     results.innerHTML = content;
     results.hidden = false;
@@ -288,7 +283,7 @@ form.addEventListener("submit", event => {
     status.textContent = "Component comparison updated.";
     return;
   }
-  const file = new Blob([standaloneReport(content, hideUnmodified.checked)], { type: "text/html;charset=utf-8" });
+  const file = new Blob([standaloneReport(content)], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(file);
   const link = document.createElement("a");
   link.href = url;
