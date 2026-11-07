@@ -53,21 +53,40 @@ function compare(before, after) {
 const entities = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\r": "&#13;", "\0": "␀" };
 const escapeHTML = text => text.replace(/[&<>\r\0]/g, character => entities[character]);
 
-const explicitHeading = /^\s*(\d+)\s*:\s*Component\s*[-–—]\s*(\S.*?)\s*$/i;
+const explicitHeading = /^\s*(\d+)(?:\s*:\s*Component\s*[-–—]|\s*\.\s*Component\s*:)\s*(\S.*?)\s*$/i;
 const numberedHeading = /^\s*(\d+)\s*:\s*(\S.*?)\s*$/;
+const numberLine = /^\s*(\d+)\s*\.\s*$/;
+const componentLine = /^\s*Component\s*:\s*(\S.*?)\s*$/i;
 
 function parseRubric(text) {
   const input = lines(text);
-  const headingPattern = input.some(line => explicitHeading.test(line))
-    ? explicitHeading : numberedHeading;
+  const readHeading = index => {
+    const line = input[index];
+    const inline = line.match(explicitHeading);
+    if (inline) return { number: inline[1], name: inline[2], heading: line.trim(), size: 1 };
+    const number = line.match(numberLine);
+    const component = number && input[index + 1]?.match(componentLine);
+    if (component) {
+      return { number: number[1], name: component[1],
+        heading: `${line.trim()} ${input[index + 1].trim()}`, size: 2 };
+    }
+  };
+  const hasExplicitHeadings = input.some((_, index) => readHeading(index));
   const preamble = [];
   const components = [];
   let content = preamble;
-  for (const line of input) {
-    const heading = line.match(headingPattern);
+  for (let index = 0; index < input.length; index++) {
+    const line = input[index];
+    let heading = readHeading(index);
+    if (!heading && !hasExplicitHeadings) {
+      const plain = line.match(numberedHeading);
+      if (plain) heading = { number: plain[1], name: plain[2], heading: line.trim(), size: 1 };
+    }
     if (heading) {
+      const { size, ...component } = heading;
       content = [];
-      components.push({ number: heading[1], name: heading[2], heading: line.trim(), content });
+      components.push({ ...component, content });
+      index += size - 1;
     } else {
       content.push(line);
     }
@@ -180,7 +199,7 @@ function renderReport(before, after) {
     : "";
   return `<h2 id="report-title" tabindex="-1">Component comparison</h2>
 <p class="legend"><span class="removed">− Removed</span> <span class="added">+ Added</span></p>
-${components.length ? tiles : '<p>No numbered component headings found. Start each section with a heading such as <code>1: Component - Accuracy</code> or <code>1: Accuracy</code>.</p>'}
+${components.length ? tiles : '<p>No numbered component headings found. Start each section with a number such as <code>1.</code> on one line and <code>Component: Accuracy</code> on the next.</p>'}
 ${preamble}`;
 }
 
@@ -194,9 +213,9 @@ const reportStyles = `
 .rubric-report .removed{background:#fce5e5;color:#842b31}
 .rubric-report .modified{background:#fff0cc;color:#634500}
 .rubric-report .unchanged{background:#e6eeea;color:#435751}
-.rubric-report .tile{overflow:hidden;margin:0 0 18px;background:white;border:1px solid #bfcfc6;border-radius:12px}
-.rubric-report .tile-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px;background:#e6eeea}
-.rubric-report h3{margin:0;font-size:1.1rem;overflow-wrap:anywhere}
+.rubric-report .tile{overflow:hidden;margin:0 0 24px;background:white;border:1px solid #9bada4;border-radius:12px}
+.rubric-report .tile-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;background:#1d4035;color:white}
+.rubric-report h3{margin:0;font-size:1.25rem;overflow-wrap:anywhere}
 .rubric-report table{width:100%;border-collapse:collapse;table-layout:fixed}
 .rubric-report th,.rubric-report td{padding:6px 10px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
 .rubric-report th{width:50%;background:#f4f7f5;font-size:.85rem;border-top:1px solid #cddbd4}
