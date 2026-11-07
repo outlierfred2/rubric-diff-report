@@ -54,15 +54,15 @@ const entities = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\r": "&#13;", "\0": 
 const escapeHTML = text => text.replace(/[&<>\r\0]/g, character => entities[character]);
 
 function parseRubric(text) {
-  const preamble = { start: 0, description: [], options: [] };
+  const preamble = { description: [], options: [] };
   const components = [];
   let current = preamble;
   let field = "description";
-  lines(text).forEach((line, index) => {
-    const heading = line.match(/^\s*(\d+)\s*:\s*(\S.*?)\s*$/);
+  for (const line of lines(text)) {
+    const heading = line.match(/^\s*(\d+)\s*:\s*Component\s*[-–—]\s*(\S.*?)\s*$/i);
     if (heading) {
       current = { number: heading[1], name: heading[2], heading: [line],
-        start: index, description: [], options: [] };
+        description: [], options: [] };
       components.push(current);
       field = "description";
     } else {
@@ -71,7 +71,7 @@ function parseRubric(text) {
       }
       current[field].push(line);
     }
-  });
+  }
   return { preamble, components };
 }
 
@@ -104,45 +104,53 @@ function pairComponents(before, after) {
   return pairs.concat(Array.from(remaining, component => [component, undefined]));
 }
 
-function renderDiff(before, after, originalLine, updatedLine) {
-  const { changes, coarse } = compare(before, after);
-  const changed = changes.some(([kind]) => kind !== "same");
-  if (!changed) return "";
-  const rows = changes.map(([kind, value]) => {
-    const oldNumber = kind === "added" ? "" : ++originalLine;
-    const newNumber = kind === "removed" ? "" : ++updatedLine;
-    const marker = { same: "", added: "+", removed: "−" }[kind];
-    return `<tr class="${kind}"><td>${oldNumber}</td><td>${newNumber}</td><td aria-label="${kind}">${marker}</td><td><code>${escapeHTML(value)}</code></td></tr>`;
+function trimBlankEdges(block) {
+  const first = block.findIndex(line => line.trim());
+  if (first === -1) return [];
+  let end = block.length;
+  while (!block[end - 1].trim()) end--;
+  return block.slice(first, end);
+}
+
+function renderDiff(before, after) {
+  const { changes, coarse } = compare(trimBlankEdges(before), trimBlankEdges(after));
+  const items = changes.filter(([kind]) => kind !== "same").map(([kind, value]) => {
+    const marker = kind === "added" ? "+" : "−";
+    const content = value.trim() ? escapeHTML(value) : '<em>Blank line</em>';
+    return `<li class="item ${kind}"><span class="marker" aria-hidden="true">${marker}</span><span class="sr-only">${kind}: </span><span class="item-text">${content}</span></li>`;
   }).join("");
+  if (!items) return "";
   return `${coarse ? "<p>This block is large, so its changes are shown as one replacement.</p>" : ""}
-<div class="table-wrap"><table>
-<thead><tr><th scope="col">Original</th><th scope="col">Updated</th><th scope="col">Change</th><th scope="col">Text</th></tr></thead>
-<tbody>${rows}</tbody></table></div>`;
+<ul class="changes" role="list">${items}</ul>`;
 }
 
 function report(before, after) {
   const original = parseRubric(before);
   const updated = parseRubric(after);
   const counts = { modified: 0, added: 0, removed: 0, unchanged: 0 };
-  const preamble = renderDiff(original.preamble.description, updated.preamble.description, 0, 0);
-  const sections = pairComponents(original.components, updated.components).map(([left, right]) => {
+  const preamble = renderDiff(original.preamble.description, updated.preamble.description);
+  const sections = pairComponents(original.components, updated.components).map(([left, right], index) => {
     const component = right ?? left;
     const fields = [
-      ["Heading", "heading", item => item.start],
-      ["Description", "description", item => item.start + 1],
-      ["Rating options", "options", item => item.start + 1 + item.description.length]
-    ].map(([label, key, offset]) => {
-      const diff = renderDiff(left?.[key] ?? [], right?.[key] ?? [],
-        left ? offset(left) : 0, right ? offset(right) : 0);
-      return diff ? `<h3>${label}</h3>${diff}` : "";
+      ["Heading", "heading"],
+      ["Description", "description"],
+      ["Rating options", "options"]
+    ].map(([label, key]) => {
+      if (key === "heading" && (!left || !right)) return "";
+      const diff = renderDiff(left?.[key] ?? [], right?.[key] ?? []);
+      return diff ? `<div class="field"><h3>${label}</h3>${diff}</div>` : "";
     }).join("");
     const kind = !left ? "added" : !right ? "removed" : fields ? "modified" : "unchanged";
     counts[kind]++;
-    const title = escapeHTML(component.heading[0]);
-    const heading = `${title} <span class="badge ${kind}">${kind}</span>`;
-    return fields
-      ? `<details open><summary>${heading}</summary>${fields}</details>`
-      : `<div class="unchanged-component">${heading}</div>`;
+    const id = `component-${index + 1}`;
+    return `<section class="component component-${kind}" aria-labelledby="${id}">
+<header class="component-header">
+<span class="number">Component ${component.number}</span>
+<h2 id="${id}">${escapeHTML(component.name)}</h2>
+<span class="badge ${kind}">${kind}</span>
+</header>
+${fields || (kind === "unchanged" ? '<p class="empty">No item changes.</p>' : "")}
+</section>`;
   }).join("");
   const summary = Object.entries(counts)
     .map(([kind, count]) => `<span class="${kind}">${count} ${kind}</span>`).join("");
@@ -151,24 +159,38 @@ function report(before, after) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
 <title>Rubric Diff Report</title><style>
-*{box-sizing:border-box}body{margin:0;background:#f6f8f5;color:#162724;font:1rem system-ui,sans-serif}
-main{max-width:1150px;margin:auto;padding:40px 20px}h1{margin:0;letter-spacing:-.04em}
-.summary{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0 25px}.summary span{padding:6px 10px;border-radius:6px;font-size:.9rem;font-weight:650}
-.added{background:#e5f5eb;color:#155738}.removed{background:#fce9e9;color:#842b31}
-.table-wrap{border:1px solid #d4dfda;border-radius:10px;overflow:auto;background:white}
-table{width:100%;border-collapse:collapse;text-align:left}td,th{padding:5px 10px;vertical-align:top}
-th{background:#edf2ee;font-size:.78rem}td{border-top:1px solid #16272415}
-td:nth-child(-n+3){width:1%;white-space:nowrap;text-align:right;font: .83rem/1.5 ui-monospace,monospace}
-code{display:block;white-space:pre-wrap;overflow-wrap:anywhere;min-height:1.5em;font:.87rem/1.5 ui-monospace,monospace;tab-size:4}
-.modified{background:#fff0cc;color:#634500}.unchanged{background:#edf2ee;color:#526460}
-details,.unchanged-component{background:white;border:1px solid #d4dfda;border-radius:10px;margin:12px 0;padding:14px}
-summary{cursor:pointer;font-weight:700;overflow-wrap:anywhere}.badge{display:inline-block;margin-left:8px;padding:3px 8px;border-radius:5px;font-size:.78rem;font-weight:650}
-h3{font-size:.9rem;margin:16px 0 8px}
+*{box-sizing:border-box}
+body{margin:0;background:#f2f5f3;color:#162724;font:1rem/1.5 system-ui,sans-serif}
+main{max-width:900px;margin:auto;padding:clamp(22px,5vw,48px) clamp(12px,4vw,28px)}
+h1{margin:0;font-size:clamp(1.8rem,5vw,2.7rem);letter-spacing:-.04em;line-height:1.15}
+.legend{margin:8px 0;color:#526460}
+.summary{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 26px}
+.badge,.summary span{display:inline-block;padding:4px 9px;border-radius:6px;font-size:.8rem;font-weight:700}
+.badge{text-transform:capitalize}
+.added{background:#dcf5e6;color:#145235}.removed{background:#fce5e5;color:#842b31}
+.modified{background:#fff0cc;color:#634500}.unchanged{background:#e6eeea;color:#435751}
+.component{overflow:hidden;margin:0 0 18px;background:white;border:1px solid #cddbd4;border-radius:12px}
+.component-header{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;padding:14px 16px;background:#e6eeea;border-left:5px solid #657a70}
+.component-modified .component-header{border-left-color:#9c6c06}
+.component-added .component-header{border-left-color:#268457}
+.component-removed .component-header{border-left-color:#b54448}
+.number{font-size:.78rem;font-weight:750;color:#435751}
+h2{margin:0;flex:1 1 12rem;font-size:1.2rem;overflow-wrap:anywhere}
+.field,.empty{margin:0;padding:12px 16px 16px}
+.field + .field{border-top:1px solid #e6eeea}
+h3{margin:0 0 7px;font-size:.85rem}
+.empty{color:#526460;font-size:.9rem}
+.changes{display:grid;gap:4px;list-style:none;margin:0;padding:0}
+.item{display:grid;grid-template-columns:1rem minmax(0,1fr);gap:8px;padding:7px 10px;border-left:3px solid;border-radius:5px}
+.item.added{border-left-color:#268457}.item.removed{border-left-color:#b54448}
+.marker{font-weight:800}
+.item-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 </style></head><body><main><h1>Rubric Diff Report</h1>
-<p>Component summary</p><div class="summary">${summary}</div>
-${preamble ? `<h2>Text outside components</h2>${preamble}` : ""}
-${sections ? `<h2>Components</h2>${sections}` : "<p>No numbered component headings were found.</p>"}
-${before === after ? "<p>The two rubrics are identical.</p>" : ""}
+<p class="legend">Only changed lines are shown. <strong>−</strong> Removed · <strong>+</strong> Added</p>
+<div class="summary" aria-label="Component summary">${summary}</div>
+${sections || '<p>No component headings found. Use <code>1: Component - Accuracy</code> to start a section.</p>'}
+${preamble ? `<section class="component" aria-labelledby="outside-components"><header class="component-header"><h2 id="outside-components">Text outside components</h2></header><div class="field">${preamble}</div></section>` : ""}
 </main></body></html>`;
 }
 
