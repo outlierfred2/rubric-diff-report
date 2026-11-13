@@ -139,19 +139,35 @@ function trimTrailingBlanks(block) {
   return block.slice(0, end);
 }
 
+function highlightWords(before, after) {
+  const tokens = text => text.match(/[\p{L}\p{N}\p{M}_]+|\s+|[^\p{L}\p{N}\p{M}_\s]/gu) ?? [];
+  const { changes } = compare(tokens(before ?? ""), tokens(after ?? ""));
+  const original = [];
+  const updated = [];
+  for (const [kind, value] of changes) {
+    const escaped = escapeHTML(value);
+    const html = kind === "same" || !value.trim()
+      ? escaped : `<mark class="word-change">${escaped}</mark>`;
+    if (kind !== "added") original.push(html);
+    if (kind !== "removed") updated.push(html);
+  }
+  return [original.join(""), updated.join("")];
+}
+
 function renderRows(changes) {
   const rows = [];
   let removed = [];
   let added = [];
-  const cell = (value, kind) => {
+  const cell = (value, kind, highlighted = escapeHTML(value ?? "")) => {
     if (value === undefined) return '<td class="gap"></td>';
     const label = { added: "+ Added", removed: "− Removed" }[kind];
     const marker = label ? `<span class="marker" aria-label="${label}">${label[0]}</span>` : "";
-    return `<td class="${kind}">${marker}<span class="line">${escapeHTML(value)}</span></td>`;
+    return `<td class="${kind}">${marker}<span class="line">${highlighted}</span></td>`;
   };
   const flush = () => {
     for (let index = 0; index < Math.max(removed.length, added.length); index++) {
-      rows.push(`<tr>${cell(removed[index], "removed")}${cell(added[index], "added")}</tr>`);
+      const [original, updated] = highlightWords(removed[index], added[index]);
+      rows.push(`<tr>${cell(removed[index], "removed", original)}${cell(added[index], "added", updated)}</tr>`);
     }
     removed = [];
     added = [];
@@ -221,6 +237,9 @@ const reportStyles = `
 .rubric-report .badge{text-transform:capitalize}
 .rubric-report .added{background:#dcf5e6;color:#145235}
 .rubric-report .removed{background:#fce5e5;color:#842b31}
+.rubric-report .word-change{color:inherit;border-radius:2px}
+.rubric-report .removed .word-change{background:#f1a6ac}
+.rubric-report .added .word-change{background:#8fdbad}
 .rubric-report .modified{background:#fff0cc;color:#634500}
 .rubric-report .unchanged{background:#e6eeea;color:#435751}
 .rubric-report .tile{overflow:hidden;margin:0 0 24px;background:white;border:1px solid #9bada4;border-radius:12px}
