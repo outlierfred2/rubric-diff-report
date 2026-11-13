@@ -231,7 +231,7 @@ ${coarse ? "<p>This component is large, so its changes are shown as one replacem
 </section>`;
 }
 
-function renderReport(before, after) {
+function renderReport(before, after, hideUnmodified = false) {
   const original = parseRubric(before);
   const updated = parseRubric(after);
   const components = pairComponents(original.components, updated.components);
@@ -246,7 +246,7 @@ function renderReport(before, after) {
   return `<p class="report-credit">Reported generated at <a href="https://outlierfred2.github.io/rubric-diff-report/">outlierfred2@github.io/rubric-diff-report</a></p>
 <h2 id="report-title" tabindex="-1">Component comparison</h2>
 <p class="legend"><span class="removed">− Removed</span> <span class="added">+ Added</span></p>
-${components.length ? '<label class="report-option"><input type="checkbox"> Hide unmodified components</label>' : ""}
+${components.length ? `<label class="report-option"><input type="checkbox"${hideUnmodified ? " checked" : ""}> Hide unmodified components</label>` : ""}
 ${components.length ? tiles : '<p>No numbered component headings found. Start each section with a number such as <code>1.</code> on one line and <code>Component: Accuracy</code> on the next.</p>'}
 ${components.length ? '<p class="no-component-changes">No modified, added, or removed components.</p>' : ""}
 ${preamble}`;
@@ -323,7 +323,8 @@ function updateControls() {
 form.addEventListener("input", updateControls);
 form.addEventListener("submit", event => {
   event.preventDefault();
-  const content = renderReport(original.value, updated.value);
+  const hideUnmodified = results.querySelector('.report-option input')?.checked ?? false;
+  const content = renderReport(original.value, updated.value, hideUnmodified);
   if (event.submitter?.name !== "download") {
     results.innerHTML = content;
     results.hidden = false;
