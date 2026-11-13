@@ -151,7 +151,9 @@ function highlightWords(before, after) {
     if (kind !== "added") original.push(html);
     if (kind !== "removed") updated.push(html);
   }
-  return [original.join(""), updated.join("")];
+  // Join adjacent changed tokens, including shared spaces between changed words.
+  return [original, updated].map(parts => parts.join("")
+    .replace(/<\/mark>(\s*)<mark class="word-change">/g, "$1"));
 }
 
 function renderRows(changes) {
@@ -238,8 +240,8 @@ const reportStyles = `
 .rubric-report .added{background:#dcf5e6;color:#145235}
 .rubric-report .removed{background:#fce5e5;color:#842b31}
 .rubric-report .word-change{color:inherit;border-radius:2px}
-.rubric-report .removed .word-change{background:#f1a6ac}
-.rubric-report .added .word-change{background:#8fdbad}
+.rubric-report .removed .word-change{background:#f5c3c7}
+.rubric-report .added .word-change{background:#b2e7c6}
 .rubric-report .modified{background:#fff0cc;color:#634500}
 .rubric-report .unchanged{background:#e6eeea;color:#435751}
 .rubric-report .tile{overflow:hidden;margin:0 0 24px;background:white;border:1px solid #9bada4;border-radius:12px}
