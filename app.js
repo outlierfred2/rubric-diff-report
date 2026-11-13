@@ -108,18 +108,45 @@ function pairComponents(before, after) {
   const originals = groupByName(before);
   const updates = groupByName(after);
   const byOriginal = new Map();
-  const pairs = after.map(right => {
-    const name = right.name.toLowerCase();
-    const candidates = originals.get(name) ?? [];
-    const matchingNumber = candidates.filter(left => left.number === right.number);
-    const sameNumberCount = updates.get(name).filter(item => item.number === right.number).length;
-    const left = candidates.length === 1 && updates.get(name).length === 1
-      ? candidates[0]
-      : matchingNumber.length === 1 && sameNumberCount === 1 ? matchingNumber[0] : undefined;
-    const pair = { left, right, removedBefore: [] };
-    if (left) byOriginal.set(left, pair);
-    return pair;
-  });
+  const pairs = after.map(right => ({ right, removedBefore: [] }));
+  const byUpdated = new Map(pairs.map(pair => [pair.right, pair]));
+  const match = (left, right) => {
+    const pair = byUpdated.get(right);
+    pair.left = left;
+    byOriginal.set(left, pair);
+  };
+
+  for (const [name, rightGroup] of updates) {
+    const leftGroup = originals.get(name) ?? [];
+    // Reserve identical components before considering numbers. An insertion can
+    // reuse an old number, especially when several components share a name.
+    const byContent = new Map();
+    const contentKey = component => JSON.stringify(trimTrailingBlanks(component.content));
+    for (const left of [...leftGroup].reverse()) {
+      const key = contentKey(left);
+      if (!byContent.has(key)) byContent.set(key, []);
+      byContent.get(key).push(left);
+    }
+    for (const right of rightGroup) {
+      const candidates = byContent.get(contentKey(right));
+      if (candidates?.length) match(candidates.pop(), right);
+    }
+
+    const remainingLeft = leftGroup.filter(left => !byOriginal.has(left));
+    const remainingRight = rightGroup.filter(right => !byUpdated.get(right).left);
+    if (remainingLeft.length === 1 && remainingRight.length === 1) {
+      match(remainingLeft[0], remainingRight[0]);
+    } else {
+      // For ambiguous edited duplicates, retain the unique-number fallback.
+      for (const right of remainingRight) {
+        const candidates = remainingLeft.filter(left => left.number === right.number);
+        if (candidates.length === 1 &&
+            remainingRight.filter(item => item.number === right.number).length === 1) {
+          match(candidates[0], right);
+        }
+      }
+    }
+  }
 
   // Keep removed tiles near their original neighbors while using the updated order.
   const trailing = [];
@@ -186,10 +213,11 @@ function renderRows(changes) {
   return rows.join("");
 }
 
-function renderTile(id, title, left, right, originalHeading, updatedHeading) {
+function renderTile(id, title, left, right, originalHeading, updatedHeading,
+  headingChanged = originalHeading !== updatedHeading) {
   const { changes, coarse } = compare(trimTrailingBlanks(left ?? []), trimTrailingBlanks(right ?? []));
   const kind = !left ? "added" : !right ? "removed"
-    : originalHeading !== updatedHeading || changes.some(([type]) => type !== "same") ? "modified" : "unchanged";
+    : headingChanged || changes.some(([type]) => type !== "same") ? "modified" : "unchanged";
   const columnHeading = (label, block, heading) => {
     const detail = block ? heading : "Component absent";
     return `<th scope="col">${label}${detail ? `<small>${escapeHTML(detail)}</small>` : ""}</th>`;
@@ -210,7 +238,7 @@ function renderReport(before, after) {
   const tiles = components.map(({ left, right }, index) => {
     const component = right ?? left;
     return renderTile(`component-${index + 1}`, `${component.number}. ${component.name}`,
-      left?.content, right?.content, left?.heading, right?.heading);
+      left?.content, right?.content, left?.heading, right?.heading, left?.name !== right?.name);
   }).join("");
   const preamble = [...original.preamble, ...updated.preamble].some(line => line.trim())
     ? renderTile("outside-components", "Text outside components", original.preamble, updated.preamble)
